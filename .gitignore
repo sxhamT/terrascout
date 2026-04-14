@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Isaac Sim / Omniverse
+_temp/
+*.log
+*.cache
+omni.log*
+
+# USD generated files
+*.usd.bak
+*.usdc
+*.usdz
+
+# VS Code
+.vscode/
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Env
+.env
+*.env
+
+# Generated
+fastdds_wsl.xml
+answers_for_me_ignore.txt
