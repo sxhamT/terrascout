@@ -1,0 +1,55 @@
+# config/topics.yaml
+# Canonical topic registry for TerraScout.
+# Update this file whenever a topic is added, renamed, or removed.
+
+topics:
+  # OmniGraph topics
+  odometry:
+    name: /odom
+    type: nav_msgs/Odometry
+    source: OmniGraph
+    
+  clock:
+    name: /clock
+    type: rosgraph_msgs/Clock
+    source: OmniGraph
+    
+  tf:
+    name: /tf
+    type: tf2_msgs/TFMessage
+    source: OmniGraph
+
+  # Pegasus topics
+  drone_pose:
+    name: /drone0/state/pose
+    type: geometry_msgs/PoseStamped
+    source: Pegasus
+    
+  drone_twist:
+    name: /drone0/state/twist
+    type: geometry_msgs/TwistStamped
+    source: Pegasus
+    
+  imu:
+    name: /drone0/sensors/imu
+    type: sensor_msgs/Imu
+    source: Pegasus
+
+  # NOTE: GPS topic intentionally omitted — GPS-denied scenario
+
+  # LiDAR (OmniGraph ROS2RtxLidarHelper)
+  lidar_points:
+    name: /drone0/sensors/lidar/points
+    type: sensor_msgs/PointCloud2
+    source: OmniGraph
+
+  # TerraScout application topics
+  zone_map:
+    name: /terrascout/zone_map
+    type: visualization_msgs/MarkerArray
+    source: OODABackend
+    
+  phase:
+    name: /terrascout/phase
+    type: std_msgs/String
+    source: OODABackend

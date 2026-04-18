@@ -1,0 +1,36 @@
+# config/mpc_params.yaml
+# Tuning parameters for TerraScout MPC descent and LiDAR classifier.
+# Loaded by controller/mpc_descent.py and scanner/lidar_classifier.py.
+
+mpc:
+  horizon_N: 20
+  dt: 0.1                      # seconds per MPC step
+  Q_pos: [10.0, 10.0, 10.0]    # position state weights [x, y, z]
+  Q_vel: [2.0,  2.0,  5.0]     # velocity state weights [vx, vy, vz]
+  R_acc: [0.1,  0.1,  0.1]     # input effort weights [ax, ay, az]
+  v_max_approach: 2.0          # max speed during approach [m/s]
+  v_max_descent:  0.5          # max vertical speed final 2m [m/s]
+  a_max_lateral:  3.0          # max horizontal acceleration [m/s²]
+  a_max_vertical: 5.0          # max vertical acceleration [m/s²]
+  solve_timeout_ms: 50.0       # fallback to PID if SLSQP exceeds this
+
+classifier:
+  slope_threshold_deg: 10.0    # reject cell if slope > this
+  roughness_threshold: 0.15    # reject cell if RMS plane residual > this [m]
+  clearance_threshold: 0.60    # reject cell if obstacle within this radius [m]
+  min_points_per_cell: 5       # skip cell if fewer LiDAR returns
+  weights:
+    slope:     0.40
+    roughness: 0.35
+    clearance: 0.25
+
+scan:
+  altitude: 8.0                # scan cruise altitude [m]
+  strip_spacing: 2.0           # lawnmower strip spacing [m]
+  coverage_target: 0.95        # fraction of grid that must be observed
+  max_retries: 2               # expand search and retry if no zone found
+
+zones:
+  safe_threshold:     0.65     # score > this → SAFE
+  marginal_threshold: 0.35     # score in [marginal, safe] → MARGINAL
+  approach_altitude:  3.0      # hover altitude above zone before descent [m]
