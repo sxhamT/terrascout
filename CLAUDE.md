@@ -1,6 +1,6 @@
 # CLAUDE.md — TerraScout
 # For: Claude Code (WSL2) — primary interface for all code changes
-# Last updated: April 18, 2026
+# Last updated: April 19, 2026
 
 ---
 
@@ -523,10 +523,11 @@ git checkout main && git merge feature/name && git push
 | Day | Status | Summary |
 |-----|--------|---------|
 | Day 1 | done | Scaffold, all files placed, folders corrected |
-| Day 2 | - | terrain_classifier.py + all 5 fixes + eval pipeline runs |
-| Day 3 | - | Full OODA end-to-end in sim + all eval numbers |
-| Day 4 | - | MPC wired into LAND + benchmark |
-| Day 5-10 | - | Report |
+| Day 2 | done | terrain_classifier.py (Kalman+Bayesian), all 5 fixes applied, eval pipeline runs |
+| Day 3 | done | Full OODA end-to-end in sim — synthetic LiDAR raycast (RTX annotator crashes on Win), DESCEND_SCAN -> LAND -> TOUCHDOWN verified |
+| Day 4 | done | Terrain roughness tuned (high-freq heightmap), height-based vertex colors, boulder registry for raycast, ZoneManager margin fix |
+| Day 5 | done | Verbose phase logging (DESCEND_SCAN 2s, zone-selected banner, LAND per-tick, TOUCHDOWN/ABORT banners), fastdds_wsl.xml gitignored |
+| Day 6-10 | - | Report |
 
 ---
 
