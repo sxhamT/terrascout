@@ -101,16 +101,21 @@ class ZoneManager:
 
     # ── Queries ───────────────────────────────────────────────────────────────
 
-    def best_zone(self):
+    def best_zone(self, margin: float = 2.0):
         """
-        Return (wx, wy, score) of the highest-scoring SAFE cell.
-        Returns None if no cell has reached SAFE status yet.
+        Return (wx, wy, score) of the highest-scoring SAFE cell whose world
+        coordinates are at least `margin` metres inside the terrain boundary.
+        Returns None if no qualifying cell has reached SAFE status yet.
         """
+        limit = self.terrain_size - margin
         best_score = -1.0
         best_cell = None
         for row in range(self.grid_h):
             for col in range(self.grid_w):
                 if self._status[row, col] == ZoneStatus.SAFE:
+                    wx, wy = self.cell_to_world_centre(row, col)
+                    if abs(wx) > limit or abs(wy) > limit:
+                        continue   # too close to terrain edge
                     s = float(self._scores[row, col])
                     if s > best_score:
                         best_score = s
