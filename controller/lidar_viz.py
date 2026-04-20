@@ -49,6 +49,7 @@ class LidarViz:
     }
     _SCAN_COLOR   = (0,   220, 220, 180)   # cyan — recent scan footprint
     _TARGET_COLOR = (255, 255, 255, 255)   # white X — committed landing zone
+    _DRONE_COLOR  = (255, 165,   0, 255)   # orange dot — drone current position
 
     def __init__(self, terrain_size: float, cell_size: float = 0.5,
                  px: int = 400, update_every: int = 10):
@@ -110,6 +111,7 @@ class LidarViz:
 
         if ooda_backend is not None:
             self._draw_scan_footprint(ooda_backend)
+            self._draw_drone(ooda_backend)
             self._draw_target(ooda_backend)
 
         if _OMNI_AVAILABLE and self._provider is not None:
@@ -166,6 +168,24 @@ class LidarViz:
             r0, r1 = max(0, row-1), min(self.px, row+2)
             c0, c1 = max(0, col-1), min(self.px, col+2)
             self._buf[r0:r1, c0:c1] = self._SCAN_COLOR
+
+    def _draw_drone(self, ooda_backend):
+        """Draw drone world position as a 5x5 orange square."""
+        state = getattr(ooda_backend, '_state', None)
+        if state is None:
+            return
+        # _state may be a Pegasus State object (.position) or a dict ("position")
+        if isinstance(state, dict):
+            pos = state.get('position')
+        else:
+            pos = getattr(state, 'position', None)
+        if pos is None or len(pos) < 2:
+            return
+        col, row = self._world_to_px(float(pos[0]), float(pos[1]))
+        arm = 2  # 5x5 square: center ±2 pixels
+        r0 = max(0, row - arm); r1 = min(self.px, row + arm + 1)
+        c0 = max(0, col - arm); c1 = min(self.px, col + arm + 1)
+        self._buf[r0:r1, c0:c1] = self._DRONE_COLOR
 
     def _draw_target(self, ooda_backend):
         """Draw committed landing zone as a white cross."""

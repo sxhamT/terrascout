@@ -288,11 +288,13 @@ class OODABackend(Backend):
                   f"safe_cells={self.zone_manager.safe_zone_count()}  "
                   f"best={best_str}")
 
-        # Push classifier results into zone_manager every tick
-        results = self._classifier.get_all_results()
-        for (row, col), res in results.items():
-            wx, wy = self._classifier.cell_to_world_centre(row, col)
-            self.zone_manager.update_cell(wx, wy, res["p_safe"], res["variance"])
+        # Push classifier results into zone_manager only on scan ticks — no new
+        # data arrives between scans so pushing every tick is pure overhead.
+        if self._tick_count % LIDAR_SCAN_EVERY_N == 0:
+            results = self._classifier.get_all_results()
+            for (row, col), res in results.items():
+                wx, wy = self._classifier.cell_to_world_centre(row, col)
+                self.zone_manager.update_cell(wx, wy, res["p_safe"], res["variance"])
 
         best = self.zone_manager.best_landing_zone(min_radius_m=0.7, margin=LAND_ZONE_MARGIN)
         if best is None:

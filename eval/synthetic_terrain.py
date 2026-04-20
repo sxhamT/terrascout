@@ -28,9 +28,10 @@ from terrain.zone_manager import ZoneManager, ZoneStatus, SAFE_THRESHOLD
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 TERRAIN_SIZE   = 10.0    # half-extent [m]
-CELL_SIZE      = 1.0     # grid resolution [m]
-SCAN_ALTITUDE  = 8.0     # synthetic LiDAR ray origin height [m]
-POINTS_PER_M2  = 15      # synthetic LiDAR density (RTX LiDAR ~10-20 pts/m² at 8m)
+CELL_SIZE      = 0.5     # grid resolution [m] — matches sim (was 1.0, changed Day 8)
+SCAN_ALTITUDE  = 15.0    # synthetic LiDAR ray origin height [m] — matches sim
+POINTS_PER_M2  = 40      # synthetic LiDAR density — raised from 15 to keep
+                          # ~10 pts/cell at 0.5 m cell_size (TerrainClassifier min=5)
 N_VARIANTS     = 50
 RESULTS_DIR    = Path(__file__).parent / "results"
 

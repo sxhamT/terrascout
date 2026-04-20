@@ -27,28 +27,29 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from eval.synthetic_terrain import TerrainVariant, TERRAIN_SIZE, CELL_SIZE, N_VARIANTS
-from scanner.lidar_classifier import LidarClassifier
+from controller.terrain_classifier import TerrainClassifier
 from terrain.zone_manager import ZoneManager, ZoneStatus, SAFE_THRESHOLD
 
 
 def run_variant(variant: TerrainVariant) -> dict:
     """
     Run the full classify pipeline on one terrain variant.
+    Uses TerrainClassifier (Kalman+Bayesian) — same stack as the sim.
     Returns a dict of metrics for that variant.
     """
-    # Build fresh classifier and zone manager
-    classifier = LidarClassifier(cell_size=CELL_SIZE, terrain_size=TERRAIN_SIZE)
+    # Build fresh classifier and zone manager — same params as sim
+    classifier = TerrainClassifier(terrain_size=TERRAIN_SIZE, cell_size=CELL_SIZE)
     zone_mgr   = ZoneManager(terrain_size=TERRAIN_SIZE, cell_size=CELL_SIZE)
 
-    # Generate synthetic point cloud and classify
+    # Generate synthetic point cloud and classify via full Kalman+Bayesian pipeline
     pts = variant.generate_point_cloud()
-    classifier.add_points(pts)
-    scores = classifier.compute_scores()
+    classifier.add_scan(pts)
 
-    # Push scores into zone manager
-    for (row, col), score in scores.items():
+    # Push p_safe + Kalman variance into zone manager (same as ooda_backend DESCEND_SCAN)
+    results = classifier.get_all_results()
+    for (row, col), res in results.items():
         wx, wy = classifier.cell_to_world_centre(row, col)
-        zone_mgr.update_cell(wx, wy, score)
+        zone_mgr.update_cell(wx, wy, res["p_safe"], res["variance"])
 
     # Build predicted safe grid (n x n bool)
     n = variant.n
@@ -74,16 +75,14 @@ def run_variant(variant: TerrainVariant) -> dict:
                  if (precision + recall) > 0 else float("nan"))
 
     # False positive rate at terrain edges
-    # "Edge cells" = cells adjacent to a cell with a different GT label
     edge_mask = _edge_mask(gt_safe)
     edge_obs  = edge_mask & observed
     fp_edge   = int(np.sum(pred_safe & ~gt_safe & edge_obs))
-    fn_edge   = int(np.sum(~pred_safe & gt_safe & edge_obs))
     edge_total = int(edge_obs.sum())
     fpr_edge  = fp_edge / edge_total if edge_total > 0 else float("nan")
 
-    # Best zone accuracy
-    best = zone_mgr.best_zone()
+    # Best zone accuracy — same cluster logic as sim
+    best = zone_mgr.best_landing_zone(min_radius_m=0.7, margin=2.0)
     if best is not None:
         bx, by, bscore = best
         bc = zone_mgr.world_to_cell(bx, by)

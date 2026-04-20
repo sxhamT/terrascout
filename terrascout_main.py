@@ -4,7 +4,18 @@
 # Run via launch_ros2.cmd (plain cmd, no admin).
 
 import sys
+import argparse as _ap
 import numpy as np
+
+# Parse --seed before any Isaac Sim imports.  parse_known_args ignores
+# Omniverse's own flags (--/rtx/..., etc.) so there is no conflict.
+_parser = _ap.ArgumentParser(add_help=False)
+_parser.add_argument('--seed', type=int, default=42,
+                     help='Terrain seed (default 42 — graded demo)')
+_sim_args, _ = _parser.parse_known_args()
+_sim_seed = _sim_args.seed
+del _ap, _parser, _sim_args
+print(f"[TerraScout] Seed={_sim_seed}")
 
 # ── 1. SimulationApp (full kit) ──────────────────────────────────────────────
 from isaacsim import SimulationApp
@@ -25,7 +36,7 @@ pg = PegasusInterface()
 
 # ── 5. Build scene (terrain, drone, backends) ────────────────────────────────
 from terrain.terrain_generator import build_scene
-zone_manager, lidar_prim_path, _ooda_backend = build_scene(simulation_app, pg)
+zone_manager, lidar_prim_path, _ooda_backend = build_scene(simulation_app, pg, seed=_sim_seed)
 
 # ── 6. OmniGraph (clock + odometry only) ────────────────────────────────────
 # LiDAR data is provided by synthetic analytical raycast inside OODABackend.

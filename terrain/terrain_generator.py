@@ -18,75 +18,93 @@ SCAN_ALTITUDE = 15.0 # metres — TAKEOFF target altitude
 # Used by _boulder_height_at() for synthetic raycast in OODABackend.
 BOULDER_LIST = []   # each entry: {"cx": float, "cy": float, "r": float, "z": float}
 
-# Gaussian bowl depressions — positions generated from SEED at module load.
-# Each bowl is a concave depression; near-zero slope at centre emerges organically.
-# The classifier must discover them from the point cloud — no hardcoded targets.
-# depth=0.6m, sigma=1.2m → effective diameter ~5m, rim slope ~23° (classifiable).
-# FLAT_PADS name preserved so ooda_backend.py inline copy stays compatible.
-import math as _math
-
-def _wave_z(cx, cy):
-    return (0.80*_math.sin(1.05*cx+0.9)*_math.cos(0.90*cy+0.4)
-           +0.60*_math.cos(1.57*cx-0.5)*_math.sin(1.40*cy+1.2)
-           +0.20*_math.sin(3.14*cx+1.7)*_math.cos(2.80*cy-0.8)
-           +0.10*_math.cos(4.71*cx+0.3)*_math.sin(4.71*cy-1.1)+0.40)
-
-def _wave_slope_deg(cx, cy, d=0.05):
-    gx = (_wave_z(cx+d, cy) - _wave_z(cx-d, cy)) / (2*d)
-    gy = (_wave_z(cx, cy+d) - _wave_z(cx, cy-d)) / (2*d)
-    return _math.degrees(_math.atan(_math.sqrt(gx**2 + gy**2)))
-
-def _pick_bowl_positions(seed, n_bowls=2, min_sep=4.0):
-    """Find n_bowls positions where background wave gradient is minimal.
-    Guarantees near-zero slope at bowl centres regardless of depth."""
-    import numpy as _np, random as _r
-    candidates = []
-    for cx in _np.arange(-7, 7.5, 0.5):
-        for cy in _np.arange(-7, 7.5, 0.5):
-            if _math.sqrt(cx**2 + cy**2) < 2.5:
-                continue   # too close to drone spawn
-            slope = _wave_slope_deg(float(cx), float(cy))
-            z = _wave_z(float(cx), float(cy))
-            if slope < 12 and z > 0.2:
-                candidates.append((slope, z, float(cx), float(cy)))
-    candidates.sort()
-    # Seeded offset ensures different seeds pick different low-gradient positions
-    _r.Random(seed + 7).shuffle(candidates)
-    candidates.sort(key=lambda t: t[0])   # re-sort by slope after shuffle for tie-breaking
-    chosen = []
-    for slope, z, cx, cy in candidates:
-        if all(_math.sqrt((cx-sx)**2 + (cy-sy)**2) > min_sep for _, _, sx, sy in chosen):
-            chosen.append((slope, z, cx, cy))
-        if len(chosen) == n_bowls:
-            break
-    return chosen
-
-_bowl_positions = _pick_bowl_positions(SEED)
+# Gaussian bowl depressions — populated by _init_flat_pads() called from build_scene().
+# FLAT_PADS starts empty; mutated in-place so ooda_backend.py's lazy import always
+# sees the current contents regardless of which seed was used.
 FLAT_PADS = []
-for _slope, _wz, _cx, _cy in _bowl_positions:
-    _depth = min(_wz - 0.1, 0.8)   # leave 0.1m floor clearance, cap at 0.8m
-    FLAT_PADS.append({
-        "cx":    _cx,
-        "cy":    _cy,
-        "depth": round(_depth, 3),
-        "sigma": 2.0,
-    })
-del _math, _wave_z, _wave_slope_deg, _pick_bowl_positions, _bowl_positions
-del _slope, _wz, _cx, _cy, _depth
 
 
-def build_scene(app, pg):
+def _init_flat_pads(seed):
+    """
+    (Re)compute FLAT_PADS in-place for the given seed.
+    Called at the start of build_scene() so --seed N produces a different terrain.
+    Uses in-place .clear()/.append() so any existing 'from … import FLAT_PADS'
+    reference stays valid (same list object, new contents).
+    """
+    import math as _m, numpy as _np, random as _r
+
+    def _wave_z(cx, cy):
+        return (0.80*_m.sin(1.05*cx+0.9)*_m.cos(0.90*cy+0.4)
+               +0.60*_m.cos(1.57*cx-0.5)*_m.sin(1.40*cy+1.2)
+               +0.20*_m.sin(3.14*cx+1.7)*_m.cos(2.80*cy-0.8)
+               +0.10*_m.cos(4.71*cx+0.3)*_m.sin(4.71*cy-1.1)+0.40)
+
+    def _wave_slope_deg(cx, cy, d=0.05):
+        gx = (_wave_z(cx+d, cy) - _wave_z(cx-d, cy)) / (2*d)
+        gy = (_wave_z(cx, cy+d) - _wave_z(cx, cy-d)) / (2*d)
+        return _m.degrees(_m.atan(_m.sqrt(gx**2 + gy**2)))
+
+    def _pick(seed, n_bowls=2, min_sep=4.0):
+        candidates = []
+        for cx in _np.arange(-7, 7.5, 0.5):
+            for cy in _np.arange(-7, 7.5, 0.5):
+                if _m.sqrt(cx**2 + cy**2) < 2.5:
+                    continue
+                slope = _wave_slope_deg(float(cx), float(cy))
+                z = _wave_z(float(cx), float(cy))
+                if slope < 12 and z > 0.2:
+                    candidates.append((slope, z, float(cx), float(cy)))
+        candidates.sort()
+        rng = _r.Random(seed + 7)
+        keys = [(t[0], rng.random()) for t in candidates]
+        candidates = [c for _, c in sorted(zip(keys, candidates))]
+        chosen = []
+        for slope, z, cx, cy in candidates:
+            if all(_m.sqrt((cx-sx)**2+(cy-sy)**2) > min_sep for _, _, sx, sy in chosen):
+                chosen.append((slope, z, cx, cy))
+            if len(chosen) == n_bowls:
+                break
+        return chosen
+
+    positions = _pick(seed)
+    FLAT_PADS.clear()
+    for _slope, _wz, _cx, _cy in positions:
+        _depth = min(_wz - 0.1, 0.8)
+        FLAT_PADS.append({
+            "cx":    _cx,
+            "cy":    _cy,
+            "depth": round(_depth, 3),
+            "sigma": 2.0,
+        })
+
+
+def build_scene(app, pg, seed=None):
     """
     Build the TerraScout terrain scene.
     Returns a ZoneManager with the initial (all-UNKNOWN) grid.
     Caller (terrascout_main.py) calls timeline.play() after this returns.
+
+    Parameters
+    ----------
+    seed : int, optional
+        Override the module-level SEED.  Pass from terrascout_main.py --seed arg.
     """
+    global SEED
+    if seed is not None:
+        SEED = seed
+
+    # (Re)compute bowl positions for this seed before any terrain is built.
+    _init_flat_pads(SEED)
+
     from terrain.zone_manager import ZoneManager
     from controller.ooda_backend import OODABackend
     from pegasus.simulator.logic.vehicles.multirotor import Multirotor, MultirotorConfig
     from pegasus.simulator.params import ROBOTS
     import omni.usd
     from pxr import UsdGeom, Gf, UsdPhysics, PhysxSchema
+
+    print(f"[TerrainGenerator] Seed={SEED}  Bowls: "
+          + "  ".join(f"({p['cx']:.1f},{p['cy']:.1f})" for p in FLAT_PADS))
 
     random.seed(SEED)
     np.random.seed(SEED)

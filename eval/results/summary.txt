@@ -2,13 +2,13 @@
 ==========================================================
   TerraScout LiDAR Classifier Evaluation
 ==========================================================
-  Variants evaluated : 50
-  Elapsed time       : 2.3 s
+  Variants evaluated : 5
+  Elapsed time       : 2.9 s
 ----------------------------------------------------------
-  Precision          : 0.972  ± 0.012
-  Recall             : 0.977  ± 0.011
-  F1 score           : 0.974  ± 0.008
-  FP rate (edges)    : 0.092  ± 0.031
-  Zone select acc    : 1.000
-  Mean coverage      : 0.999
+  Precision          : 0.938  ± 0.012
+  Recall             : 0.977  ± 0.008
+  F1 score           : 0.957  ± 0.007
+  FP rate (edges)    : 0.311  ± 0.043
+  Zone select acc    : 0.800
+  Mean coverage      : 0.971
 ==========================================================
