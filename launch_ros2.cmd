@@ -10,4 +10,5 @@ set FASTRTPS_DEFAULT_PROFILES_FILE=D:\project\terrascout\fastdds_wsl.xml
 set ISAAC_ROS2_DISTRO=humble
 
 cd D:\project\terrascout
-python terrascout_main.py
+python terrascout_main.py %*
+pause

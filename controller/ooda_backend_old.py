@@ -28,7 +28,7 @@ LAND_ALT_ZERO          = 0.05   # metres — below this -> touchdown detected
 LAND_ZONE_MARGIN       = 2.0    # m — reject zones within this dist of terrain edge
 
 LIDAR_SCAN_EVERY_N     = 3      # call synthetic scan every N update ticks
-DESCEND_MIN_SCANS      = 15     # minimum LiDAR frames before committing to a zone
+DESCEND_MIN_SCANS      = 3      # minimum LiDAR frames before committing to a zone
 
 
 class OODABackend(Backend):
@@ -59,7 +59,7 @@ class OODABackend(Backend):
         self._pid = PIDController()
         self._classifier = TerrainClassifier(
             terrain_size=zone_manager.terrain_size,
-            cell_size=0.5,
+            cell_size=1.0,
         )
         self._mpc = None  # loaded lazily at TAKEOFF exit
 
@@ -78,7 +78,6 @@ class OODABackend(Backend):
         self._descent_target_z = float(scan_altitude)  # steps 0.02m/tick in DESCEND_SCAN
         self._land_target_z    = None                  # initialised at LAND entry, 0.01m/tick
 
-        self._last_scan_pts = None   # last synthetic scan — for top-down display
         print("[OODABackend] Initialised.")
 
     # ── Pegasus Backend interface ─────────────────────────────────────────────
@@ -119,7 +118,6 @@ class OODABackend(Backend):
         self._descent_target_z = float(self.scan_altitude)
         self._land_target_z    = None
         self.input_ref = [0.0, 0.0, 0.0, 0.0]
-        self._last_scan_pts = None
         print("[OODABackend] reset()")
 
     # ── Synthetic LiDAR ───────────────────────────────────────────────────────
@@ -139,7 +137,7 @@ class OODABackend(Backend):
 
         alt = float(drone_pos[2])
         fov_radius = alt * 0.6
-        step = 0.25
+        step = 0.4
 
         xs = np.arange(drone_pos[0] - fov_radius,
                        drone_pos[0] + fov_radius + step, step, dtype=np.float32)
@@ -160,16 +158,21 @@ class OODABackend(Backend):
             + 0.20 * np.sin(3.14 * wx + 1.7) * np.cos(2.80 * wy - 0.8)
             + 0.10 * np.cos(4.71 * wx + 0.3) * np.sin(4.71 * wy - 1.1)
             + 0.40)
-        # Gaussian bowl depressions — must match _heightmap_z() exactly
         for pad in FLAT_PADS:
-            cx, cy = pad["cx"], pad["cy"]
-            depth, sigma = pad["depth"], pad["sigma"]
-            dist2 = (wx - cx) ** 2 + (wy - cy) ** 2
-            wz = wz - depth * np.exp(-dist2 / (2.0 * sigma ** 2))
+            cx, cy, r = pad["cx"], pad["cy"], pad["r"]
+            dist = np.sqrt((wx - cx) ** 2 + (wy - cy) ** 2)
+            t = np.clip(1.0 - dist / r, 0.0, 1.0)
+            blend = t * t * (3.0 - 2.0 * t)
+            pad_z = (0.80 * np.sin(1.05 * cx + 0.9) * np.cos(0.90 * cy + 0.4)
+                   + 0.60 * np.cos(1.57 * cx - 0.5) * np.sin(1.40 * cy + 1.2)
+                   + 0.20 * np.sin(3.14 * cx + 1.7) * np.cos(2.80 * cy - 0.8)
+                   + 0.10 * np.cos(4.71 * cx + 0.3) * np.sin(4.71 * cy - 1.1)
+                   + 0.40)
+            wz = wz * (1.0 - blend) + pad_z * blend
         # Perimeter wall — matches _heightmap_z() rim term
         rim = np.maximum(np.maximum(np.abs(wx), np.abs(wy)) - 7.0, 0.0)
         wz = wz + 3.0 * rim * rim
-        wz = np.clip(wz, -0.5, 20.0)
+        wz = np.clip(wz, -0.5, 10.0)
 
         # Vectorised boulder spherical-cap heights
         wz_boulder = np.zeros(len(wx), dtype=np.float32)
@@ -184,9 +187,7 @@ class OODABackend(Backend):
 
         wz += np.random.normal(0, 0.02, len(wx)).astype(np.float32)
 
-        pts_out = np.column_stack([wx, wy, wz]).astype(np.float32)
-        self._last_scan_pts = pts_out   # stored for top-down visualiser
-        return pts_out
+        return np.column_stack([wx, wy, wz]).astype(np.float32)
 
     def _compute_ground_z(self, wx: float, wy: float) -> float:
         """
@@ -279,7 +280,7 @@ class OODABackend(Backend):
         # _compute_ground_z is called only here (not every tick) to avoid overhead.
         if int(self._phase_timer / 2.0) > int((self._phase_timer - dt) / 2.0):
             drone_gz = self._compute_ground_z(float(s["position"][0]), float(s["position"][1]))
-            best_p = self.zone_manager.best_landing_zone(min_radius_m=0.7, margin=LAND_ZONE_MARGIN)
+            best_p = self.zone_manager.best_landing_zone(min_radius_m=1.0, margin=LAND_ZONE_MARGIN)
             best_str = (f"P={best_p[2]:.3f} at ({best_p[0]:.1f},{best_p[1]:.1f})"
                         if best_p is not None else "none")
             print(f"[DESCEND_SCAN] alt={alt:.1f}m  alt_agl={alt - drone_gz:.1f}m  "
@@ -288,15 +289,13 @@ class OODABackend(Backend):
                   f"safe_cells={self.zone_manager.safe_zone_count()}  "
                   f"best={best_str}")
 
-        # Push classifier results into zone_manager only on scan ticks — no new
-        # data arrives between scans so pushing every tick is pure overhead.
-        if self._tick_count % LIDAR_SCAN_EVERY_N == 0:
-            results = self._classifier.get_all_results()
-            for (row, col), res in results.items():
-                wx, wy = self._classifier.cell_to_world_centre(row, col)
-                self.zone_manager.update_cell(wx, wy, res["p_safe"], res["variance"])
+        # Push classifier results into zone_manager every tick
+        results = self._classifier.get_all_results()
+        for (row, col), res in results.items():
+            wx, wy = self._classifier.cell_to_world_centre(row, col)
+            self.zone_manager.update_cell(wx, wy, res["p_safe"], res["variance"])
 
-        best = self.zone_manager.best_landing_zone(min_radius_m=0.7, margin=LAND_ZONE_MARGIN)
+        best = self.zone_manager.best_landing_zone(min_radius_m=1.0, margin=LAND_ZONE_MARGIN)
         if best is None:
             print(f"[DESCEND_SCAN] no valid cluster  scans={self._lidar_frame_count}"
                   f"  safe_cells={self.zone_manager.safe_zone_count()}"
@@ -329,7 +328,7 @@ class OODABackend(Backend):
                 self._target_ground_z = max(samples)
                 print(f"[WARN] ground_z was <=0 at ({bx:.1f},{by:.1f}) — "
                       f"neighbourhood max = {self._target_ground_z:.3f}m")
-            clusters = self.zone_manager.get_all_clusters(min_radius_m=0.7, margin=LAND_ZONE_MARGIN)
+            clusters = self.zone_manager.get_all_clusters(min_radius_m=1.0, margin=LAND_ZONE_MARGIN)
             print(f"[ASSESS] Valid landing clusters (>=1.5m radius): {len(clusters)}")
             for cx_s, cy_s, sc, sz in clusters[:5]:
                 print(f"         ({cx_s:.1f},{cy_s:.1f}) score={sc:.3f} size={sz} cells")

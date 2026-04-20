@@ -30,6 +30,7 @@ desktop.ini
 # Generated
 fastdds_wsl.xml
 answers_for_me_ignore.txt
+sessions.txt
 
 # Runtime logs
 logs/

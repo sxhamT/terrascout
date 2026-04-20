@@ -9,6 +9,7 @@
 
 import numpy as np
 from enum import Enum
+from scipy.ndimage import label
 
 
 class ZoneStatus(Enum):
@@ -18,7 +19,7 @@ class ZoneStatus(Enum):
     UNSAFE   = 3   # score < MARGINAL_THRESHOLD — rejected
 
 
-SAFE_THRESHOLD     = 0.65
+SAFE_THRESHOLD     = 0.55
 MARGINAL_THRESHOLD = 0.35
 
 
@@ -160,6 +161,85 @@ class ZoneManager:
                 if self._status[row, col] == ZoneStatus.SAFE:
                     wx, wy = self.cell_to_world_centre(row, col)
                     yield wx, wy, float(self._scores[row, col])
+
+    def _find_clusters(self, min_cells: int, margin: float):
+        """
+        Internal: find all contiguous SAFE clusters that meet the minimum cell count
+        and are within the terrain margin.
+
+        Uses scipy.ndimage.label for connected-component analysis.
+        Returns list of (cx_world, cy_world, mean_score, size) sorted by score desc.
+        """
+        limit = self.terrain_size - margin
+
+        # Build binary safe grid with margin filter applied
+        safe_grid = np.zeros((self.grid_h, self.grid_w), dtype=bool)
+        for r in range(self.grid_h):
+            for c in range(self.grid_w):
+                if self._status[r, c] == ZoneStatus.SAFE:
+                    wx, wy = self.cell_to_world_centre(r, c)
+                    if abs(wx) <= limit and abs(wy) <= limit:
+                        safe_grid[r, c] = True
+
+        labeled, n_features = label(safe_grid)
+        if n_features == 0:
+            return []
+
+        clusters = []
+        for cluster_id in range(1, n_features + 1):
+            cluster_mask = labeled == cluster_id
+            size = int(cluster_mask.sum())
+            if size < min_cells:
+                continue
+            rows, cols = np.where(cluster_mask)
+            scores = [float(self._scores[r, c])
+                      for r, c in zip(rows, cols)
+                      if not np.isnan(self._scores[r, c])]
+            if not scores:
+                continue
+            mean_score = float(np.mean(scores))
+            cx = float(np.mean([self.cell_to_world_centre(r, c)[0]
+                                 for r, c in zip(rows, cols)]))
+            cy = float(np.mean([self.cell_to_world_centre(r, c)[1]
+                                 for r, c in zip(rows, cols)]))
+            clusters.append((cx, cy, mean_score, size))
+
+        return sorted(clusters, key=lambda x: -x[2])
+
+    def best_landing_zone(self, min_radius_m: float = 1.0, margin: float = 2.0):
+        """
+        Find best landing zone as a contiguous cluster of SAFE cells.
+
+        Requires a minimum contiguous safe area (~pi * min_radius_m^2 cells).
+        Single isolated SAFE cells are not sufficient — the drone needs a real
+        flat patch, not a noise spike.
+
+        Parameters
+        ----------
+        min_radius_m : float
+            Minimum radius of contiguous safe area in metres.
+            At cell_size=1m, 1.5m radius ≈ 7 cells (pi*1.5^2).
+        margin : float
+            Reject clusters whose centre is within this distance of the boundary.
+
+        Returns
+        -------
+        (cx, cy, score) of the best cluster centre, or None.
+        """
+        min_cells = max(1, int(np.pi * (min_radius_m / self.cell_size) ** 2))
+        clusters = self._find_clusters(min_cells, margin)
+        if not clusters:
+            return None
+        cx, cy, score, size = clusters[0]
+        return cx, cy, score
+
+    def get_all_clusters(self, min_radius_m: float = 1.0, margin: float = 2.0):
+        """
+        Return list of (cx, cy, score, size) for every valid landing cluster,
+        sorted by mean score descending.  Used for diagnostic printing.
+        """
+        min_cells = max(1, int(np.pi * (min_radius_m / self.cell_size) ** 2))
+        return self._find_clusters(min_cells, margin)
 
     def reset(self):
         """Clear all observations — used when restarting a scan."""

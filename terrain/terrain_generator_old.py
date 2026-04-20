@@ -18,93 +18,26 @@ SCAN_ALTITUDE = 15.0 # metres — TAKEOFF target altitude
 # Used by _boulder_height_at() for synthetic raycast in OODABackend.
 BOULDER_LIST = []   # each entry: {"cx": float, "cy": float, "r": float, "z": float}
 
-# Gaussian bowl depressions — populated by _init_flat_pads() called from build_scene().
-# FLAT_PADS starts empty; mutated in-place so ooda_backend.py's lazy import always
-# sees the current contents regardless of which seed was used.
-FLAT_PADS = []
+# Flat safe zones baked directly into the heightmap.
+# Exported so terrain_classifier and zone_manager can use positions for validation.
+FLAT_PADS = [
+    {"cx": -4.0, "cy": -3.0, "r": 2.5},
+    {"cx":  4.5, "cy":  3.5, "r": 2.5},
+]
 
 
-def _init_flat_pads(seed):
-    """
-    (Re)compute FLAT_PADS in-place for the given seed.
-    Called at the start of build_scene() so --seed N produces a different terrain.
-    Uses in-place .clear()/.append() so any existing 'from … import FLAT_PADS'
-    reference stays valid (same list object, new contents).
-    """
-    import math as _m, numpy as _np, random as _r
-
-    def _wave_z(cx, cy):
-        return (0.80*_m.sin(1.05*cx+0.9)*_m.cos(0.90*cy+0.4)
-               +0.60*_m.cos(1.57*cx-0.5)*_m.sin(1.40*cy+1.2)
-               +0.20*_m.sin(3.14*cx+1.7)*_m.cos(2.80*cy-0.8)
-               +0.10*_m.cos(4.71*cx+0.3)*_m.sin(4.71*cy-1.1)+0.40)
-
-    def _wave_slope_deg(cx, cy, d=0.05):
-        gx = (_wave_z(cx+d, cy) - _wave_z(cx-d, cy)) / (2*d)
-        gy = (_wave_z(cx, cy+d) - _wave_z(cx, cy-d)) / (2*d)
-        return _m.degrees(_m.atan(_m.sqrt(gx**2 + gy**2)))
-
-    def _pick(seed, n_bowls=2, min_sep=4.0):
-        candidates = []
-        for cx in _np.arange(-7, 7.5, 0.5):
-            for cy in _np.arange(-7, 7.5, 0.5):
-                if _m.sqrt(cx**2 + cy**2) < 2.5:
-                    continue
-                slope = _wave_slope_deg(float(cx), float(cy))
-                z = _wave_z(float(cx), float(cy))
-                if slope < 12 and z > 0.2:
-                    candidates.append((slope, z, float(cx), float(cy)))
-        candidates.sort()
-        rng = _r.Random(seed + 7)
-        keys = [(t[0], rng.random()) for t in candidates]
-        candidates = [c for _, c in sorted(zip(keys, candidates))]
-        chosen = []
-        for slope, z, cx, cy in candidates:
-            if all(_m.sqrt((cx-sx)**2+(cy-sy)**2) > min_sep for _, _, sx, sy in chosen):
-                chosen.append((slope, z, cx, cy))
-            if len(chosen) == n_bowls:
-                break
-        return chosen
-
-    positions = _pick(seed)
-    FLAT_PADS.clear()
-    for _slope, _wz, _cx, _cy in positions:
-        _depth = min(_wz - 0.1, 0.8)
-        FLAT_PADS.append({
-            "cx":    _cx,
-            "cy":    _cy,
-            "depth": round(_depth, 3),
-            "sigma": 2.0,
-        })
-
-
-def build_scene(app, pg, seed=None):
+def build_scene(app, pg):
     """
     Build the TerraScout terrain scene.
     Returns a ZoneManager with the initial (all-UNKNOWN) grid.
     Caller (terrascout_main.py) calls timeline.play() after this returns.
-
-    Parameters
-    ----------
-    seed : int, optional
-        Override the module-level SEED.  Pass from terrascout_main.py --seed arg.
     """
-    global SEED
-    if seed is not None:
-        SEED = seed
-
-    # (Re)compute bowl positions for this seed before any terrain is built.
-    _init_flat_pads(SEED)
-
     from terrain.zone_manager import ZoneManager
     from controller.ooda_backend import OODABackend
     from pegasus.simulator.logic.vehicles.multirotor import Multirotor, MultirotorConfig
     from pegasus.simulator.params import ROBOTS
     import omni.usd
     from pxr import UsdGeom, Gf, UsdPhysics, PhysxSchema
-
-    print(f"[TerrainGenerator] Seed={SEED}  Bowls: "
-          + "  ".join(f"({p['cx']:.1f},{p['cy']:.1f})" for p in FLAT_PADS))
 
     random.seed(SEED)
     np.random.seed(SEED)
@@ -132,7 +65,7 @@ def build_scene(app, pg, seed=None):
     # ── i. ZoneManager + OODABackend + MultirotorConfig ───────────────────────
     zone_manager = ZoneManager(
         terrain_size=TERRAIN_SIZE,
-        cell_size=0.5,
+        cell_size=1.0,
     )
     backend = OODABackend(zone_manager, scan_altitude=SCAN_ALTITUDE)
     config = MultirotorConfig()
@@ -293,11 +226,13 @@ def _create_terrain(stage):
         BOULDER_LIST.append({"cx": pos[0], "cy": pos[1], "r": r, "z": hz})
         print(f"[TerrainGenerator]   boulder_{i} at ({pos[0]:.1f},{pos[1]:.1f}), r={r:.2f}")
 
-    # Print bowl positions for verification — NOT hardcoded targets.
-    for i, pad in enumerate(FLAT_PADS):
+    # Flat safe zones are baked into the heightmap mesh via _heightmap_z() —
+    # no separate USD prims. FLAT_PADS positions are used by the classifier
+    # for ground-truth validation only.
+    for pad in FLAT_PADS:
         pad_z = _heightmap_z(pad["cx"], pad["cy"])
-        print(f"[TerrainGenerator]   bowl_{i} at ({pad['cx']:.2f},{pad['cy']:.2f}), "
-              f"depth={pad['depth']}m sigma={pad['sigma']}m  surface_z={pad_z:.2f}m")
+        print(f"[TerrainGenerator]   flat pad baked at ({pad['cx']},{pad['cy']}), "
+              f"r={pad['r']}m, z={pad_z:.2f}")
 
 
 def _random_terrain_pos(min_r, max_r):
@@ -318,8 +253,8 @@ def _heightmap_z(x, y):
       Layer 3 (f=3.14, A=0.40): wavelength ~2 m, max slope ~51°
       Layer 4 (f=4.71, A=0.20): wavelength ~1.3 m, fine surface texture
 
-    Gaussian bowl depressions (FLAT_PADS) are subtracted from the heightmap.
-    Near-zero slope at bowl centres emerges organically — no hardcoded flat patch.
+    Flat pads (FLAT_PADS) are baked in via smoothstep blend so the heightmap
+    mesh itself is flat there — no separate USD prim needed.
 
     Perimeter wall: quadratic rise outside ±7 m forces steep UNSAFE cells
     at the boundary so the drone never targets the mesh edge.
@@ -336,19 +271,23 @@ def _heightmap_z(x, y):
     h +=  0.10 * np.cos(4.71 * x + 0.3) * np.sin(4.71 * y - 1.1)
     h += 0.40
 
-    # Gaussian bowl depressions — subtract a bowl at each seeded-random position.
-    # h -= depth * exp(-dist² / (2*sigma²))
-    # Slope at centre is organically near-zero; classifier must discover from point cloud.
+    # Bake flat pads: smoothstep blend toward pad centre height
     for pad in FLAT_PADS:
-        cx, cy = pad["cx"], pad["cy"]
-        depth, sigma = pad["depth"], pad["sigma"]
-        dist2 = (x - cx) ** 2 + (y - cy) ** 2
-        h -= depth * np.exp(-dist2 / (2.0 * sigma ** 2))
+        cx, cy, r = pad["cx"], pad["cy"], pad["r"]
+        dist = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+        t = np.clip(1.0 - dist / r, 0.0, 1.0)
+        blend = t * t * (3.0 - 2.0 * t)  # smoothstep: C1 continuous, no hard edge
+        pad_z = (0.80 * np.sin(1.05 * cx + 0.9) * np.cos(0.90 * cy + 0.4)
+               + 0.60 * np.cos(1.57 * cx - 0.5) * np.sin(1.40 * cy + 1.2)
+               + 0.20 * np.sin(3.14 * cx + 1.7) * np.cos(2.80 * cy - 0.8)
+               + 0.10 * np.cos(4.71 * cx + 0.3) * np.sin(4.71 * cy - 1.1)
+               + 0.40)
+        h = h * (1.0 - blend) + pad_z * blend
 
     # Perimeter wall
     rim = np.maximum(np.maximum(np.abs(x), np.abs(y)) - 7.0, 0.0)
     h += 3.0 * rim * rim
-    h = np.clip(h, -0.5, 20.0)
+    h = np.clip(h, -0.5, 10.0)
 
     return float(h[0]) if scalar else h.astype(np.float32)
 
@@ -383,6 +322,10 @@ def _create_heightmap(stage, prim_path: str, grid: int = 80):
     xs = np.linspace(-extent, extent, grid)
     ys = np.linspace(-extent, extent, grid)
 
+    # Flat vertex coordinate arrays — used for pad colour override below.
+    xs_flat = np.tile(xs, grid)          # shape (grid*grid,) — x repeats per row
+    ys_flat = np.repeat(ys, grid)        # shape (grid*grid,) — y repeats per column
+
     # Build vertex array (grid*grid, 3)
     verts = []
     heights = []
@@ -416,30 +359,35 @@ def _create_heightmap(stage, prim_path: str, grid: int = 80):
     # gets no return.  This is the primary reason RTX LiDAR misses the terrain.
     mesh.GetDoubleSidedAttr().Set(True)
 
-    # Slope-based vertex colours — analytically computed, invisible to physics/raycast.
-    # Green=safe, yellow=marginal, orange=steep, red=cliff, blue tint=concave bowl.
-    heights_grid = np.array(heights, dtype=np.float32).reshape(grid, grid)
-    cell_m = (2 * extent) / (grid - 1)
-    dzdx = np.gradient(heights_grid, cell_m, axis=1)
-    dzdy = np.gradient(heights_grid, cell_m, axis=0)
-    slope_deg = np.degrees(np.arctan(np.sqrt(dzdx**2 + dzdy**2))).ravel()
-    lap = (np.gradient(dzdx, cell_m, axis=1) + np.gradient(dzdy, cell_m, axis=0)).ravel()
-
+    # Height-based vertex colours — high-contrast ramp with power-curve stretch.
+    heights_np = np.array(heights, dtype=np.float32)
+    h_min, h_max = heights_np.min(), heights_np.max()
+    h_norm = (heights_np - h_min) / (h_max - h_min + 1e-6)
+    h_norm = np.power(h_norm, 0.5)   # sqrt stretches low values for more contrast
     colors = []
-    for i, sd in enumerate(slope_deg):
-        if sd < 8:
-            r, g, b = 0.30, 0.75, 0.25    # green  — safe for drone
-        elif sd < 15:
-            r, g, b = 0.65, 0.80, 0.20    # yellow-green — marginal
-        elif sd < 25:
-            r, g, b = 0.85, 0.70, 0.10    # yellow — steep
-        elif sd < 35:
-            r, g, b = 0.90, 0.40, 0.05    # orange — at/above 30 deg pre-filter
+    for h in h_norm:
+        if h < 0.5:
+            # Dark rocky brown lowlands
+            t = h / 0.5
+            r, g, b = 0.35 + t * 0.20, 0.25 + t * 0.15, 0.15 + t * 0.10
+        elif h < 0.75:
+            # Mid grey rock
+            t = (h - 0.5) / 0.25
+            r, g, b = 0.55 + t * 0.20, 0.52 + t * 0.20, 0.50 + t * 0.20
         else:
-            r, g, b = 0.75, 0.10, 0.05    # red    — cliff
-        if lap[i] < -0.05:
-            b = min(b + 0.25, 1.0)        # blue tint on concave bowl faces
-        colors.append(Gf.Vec3f(float(r), float(g), float(b)))
+            # Dramatic white peaks
+            t = (h - 0.75) / 0.25
+            r, g, b = 0.75 + t * 0.25, 0.75 + t * 0.25, 0.75 + t * 0.25
+        colors.append(Gf.Vec3f(float(min(r, 1.0)), float(min(g, 1.0)), float(min(b, 1.0))))
+
+    # Override pad vertices to bright green for visual confirmation.
+    # Does not affect physics, heightmap geometry, or synthetic raycast.
+    for vi, (vx_coord, vy_coord) in enumerate(zip(xs_flat, ys_flat)):
+        for pad in FLAT_PADS:
+            dist = np.sqrt((vx_coord - pad["cx"])**2 + (vy_coord - pad["cy"])**2)
+            if dist <= pad["r"]:
+                colors[vi] = Gf.Vec3f(0.05, 0.85, 0.15)   # bright green
+                break
 
     primvar_api = UsdGeom.PrimvarsAPI(mesh.GetPrim())
     color_pv = primvar_api.CreatePrimvar(

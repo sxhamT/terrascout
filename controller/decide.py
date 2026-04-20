@@ -9,7 +9,8 @@ class Phase(Enum):
     IDLE          = auto()   # startup — zero rotors, init subsystems
     TAKEOFF       = auto()   # climb to scan altitude under PID
     DESCEND_SCAN  = auto()   # descend slowly while LiDAR classifies terrain below
-    LAND          = auto()   # MPC final descent to committed zone, touchdown
+    APPROACH      = auto()   # PID transit to 5m directly above committed zone
+    LAND          = auto()   # MPC final descent from 5m to touchdown
     ABORT         = auto()   # no viable zone found — return to origin and land
 
 
