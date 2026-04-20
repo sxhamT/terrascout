@@ -18,6 +18,13 @@ SCAN_ALTITUDE = 15.0 # metres — TAKEOFF target altitude
 # Used by _boulder_height_at() for synthetic raycast in OODABackend.
 BOULDER_LIST = []   # each entry: {"cx": float, "cy": float, "r": float, "z": float}
 
+# Flat safe zones baked directly into the heightmap.
+# Exported so terrain_classifier and zone_manager can use positions for validation.
+FLAT_PADS = [
+    {"cx": -4.0, "cy": -3.0, "r": 2.5},
+    {"cx":  4.5, "cy":  3.5, "r": 2.5},
+]
+
 
 def build_scene(app, pg):
     """
@@ -91,7 +98,7 @@ def build_scene(app, pg):
     # Do NOT use pg.spawn_vehicle() — GUI-only path.
     # Multirotor() calls lidar.initialize(vehicle), which runs
     # IsaacSensorCreateRtxLidar and sets lidar._sensor to the created prim.
-    Multirotor("/World/quadrotor", ROBOTS["Iris"], 0, [0.0, 0.0, 30.0], config=config)
+    Multirotor("/World/quadrotor", ROBOTS["Iris"], 0, [0.0, 0.0, 3.0], config=config)
 
     # Confirm lidar prim was created by Multirotor init.
     # If this prints None, Pegasus failed to create the RTX lidar prim.
@@ -196,7 +203,7 @@ def _create_terrain(stage):
     BOULDER_LIST.clear()
     n_boulders = random.randint(8, 12)
     for i in range(n_boulders):
-        pos = _random_terrain_pos(min_r=1.5, max_r=8.5)
+        pos = _random_terrain_pos(min_r=1.5, max_r=6.0)
         r = random.uniform(0.30, 0.80)
         hz = _heightmap_z(pos[0], pos[1])
         prim_path = f"/World/terrain/boulder_{i}"
@@ -219,12 +226,13 @@ def _create_terrain(stage):
         BOULDER_LIST.append({"cx": pos[0], "cy": pos[1], "r": r, "z": hz})
         print(f"[TerrainGenerator]   boulder_{i} at ({pos[0]:.1f},{pos[1]:.1f}), r={r:.2f}")
 
-    # Guaranteed flat landing pad — cleared area so classifier finds a SAFE zone.
-    # Placed at a fixed offset from origin; z anchored to the heightmap surface.
-    pad_x, pad_y = 3.0, 4.0
-    pad_z = _heightmap_z(pad_x, pad_y)
-    _create_flat_pad(stage, "/World/terrain/safe_pad", pos=[pad_x, pad_y], z=pad_z)
-    print(f"[TerrainGenerator]   safe_pad at ({pad_x},{pad_y}), z={pad_z:.2f}")
+    # Flat safe zones are baked into the heightmap mesh via _heightmap_z() —
+    # no separate USD prims. FLAT_PADS positions are used by the classifier
+    # for ground-truth validation only.
+    for pad in FLAT_PADS:
+        pad_z = _heightmap_z(pad["cx"], pad["cy"])
+        print(f"[TerrainGenerator]   flat pad baked at ({pad['cx']},{pad['cy']}), "
+              f"r={pad['r']}m, z={pad_z:.2f}")
 
 
 def _random_terrain_pos(min_r, max_r):
@@ -234,24 +242,54 @@ def _random_terrain_pos(min_r, max_r):
     return [r * np.cos(angle), r * np.sin(angle)]
 
 
-def _heightmap_z(x: float, y: float) -> float:
+def _heightmap_z(x, y):
     """
-    Evaluate the procedural heightmap at world position (x, y).
-    Uses overlapping sine/cosine waves — no external libraries needed.
+    Evaluate the procedural heightmap at world position(s) (x, y).
+    Accepts both scalars and numpy arrays.
 
-    Frequencies chosen so that slope varies meaningfully across 1 m cells:
-      Layer 1 (f=1.05): wavelength ~6 m, max slope ~24°
-      Layer 2 (f=1.57): wavelength ~4 m, max slope ~26°
-      Layer 3 (f=3.14): wavelength ~2 m, max slope ~32°  (hits pre-filter)
-    This forces the Bayesian classifier to discriminate — the old low-frequency
-    terrain (~35 m wavelength) made every 1 m cell trivially flat.
+    Rocky wave layers:
+      Layer 1 (f=1.05, A=0.80): wavelength ~6 m, max slope ~40°
+      Layer 2 (f=1.57, A=0.60): wavelength ~4 m, max slope ~43°
+      Layer 3 (f=3.14, A=0.40): wavelength ~2 m, max slope ~51°
+      Layer 4 (f=4.71, A=0.20): wavelength ~1.3 m, fine surface texture
+
+    Flat pads (FLAT_PADS) are baked in via smoothstep blend so the heightmap
+    mesh itself is flat there — no separate USD prim needed.
+
+    Perimeter wall: quadratic rise outside ±7 m forces steep UNSAFE cells
+    at the boundary so the drone never targets the mesh edge.
     """
-    h  =  0.40 * np.sin(1.05 * x + 0.9) * np.cos(0.90 * y + 0.4)
-    h +=  0.30 * np.cos(1.57 * x - 0.5) * np.sin(1.40 * y + 1.2)
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    scalar = x.ndim == 0
+    x = np.atleast_1d(x)
+    y = np.atleast_1d(y)
+
+    h  =  0.80 * np.sin(1.05 * x + 0.9) * np.cos(0.90 * y + 0.4)
+    h +=  0.60 * np.cos(1.57 * x - 0.5) * np.sin(1.40 * y + 1.2)
     h +=  0.20 * np.sin(3.14 * x + 1.7) * np.cos(2.80 * y - 0.8)
-    # Bias upward so surface sits above z=0
+    h +=  0.10 * np.cos(4.71 * x + 0.3) * np.sin(4.71 * y - 1.1)
     h += 0.40
-    return float(np.clip(h, -0.5, 1.5))
+
+    # Bake flat pads: smoothstep blend toward pad centre height
+    for pad in FLAT_PADS:
+        cx, cy, r = pad["cx"], pad["cy"], pad["r"]
+        dist = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+        t = np.clip(1.0 - dist / r, 0.0, 1.0)
+        blend = t * t * (3.0 - 2.0 * t)  # smoothstep: C1 continuous, no hard edge
+        pad_z = (0.80 * np.sin(1.05 * cx + 0.9) * np.cos(0.90 * cy + 0.4)
+               + 0.60 * np.cos(1.57 * cx - 0.5) * np.sin(1.40 * cy + 1.2)
+               + 0.20 * np.sin(3.14 * cx + 1.7) * np.cos(2.80 * cy - 0.8)
+               + 0.10 * np.cos(4.71 * cx + 0.3) * np.sin(4.71 * cy - 1.1)
+               + 0.40)
+        h = h * (1.0 - blend) + pad_z * blend
+
+    # Perimeter wall
+    rim = np.maximum(np.maximum(np.abs(x), np.abs(y)) - 7.0, 0.0)
+    h += 3.0 * rim * rim
+    h = np.clip(h, -0.5, 10.0)
+
+    return float(h[0]) if scalar else h.astype(np.float32)
 
 
 def _boulder_height_at(wx: float, wy: float) -> float:
@@ -355,21 +393,6 @@ def _create_heightmap(stage, prim_path: str, grid: int = 80):
     sem.CreateSemanticTypeAttr().Set("class")
     sem.CreateSemanticDataAttr().Set("terrain")
 
-
-def _create_flat_pad(stage, prim_path, pos, z: float = 0.0):
-    """Flat cylinder representing a guaranteed-safe landing pad."""
-    from pxr import UsdGeom, Gf, UsdPhysics, Semantics
-    cyl = UsdGeom.Cylinder.Define(stage, prim_path)
-    cyl.GetRadiusAttr().Set(1.0)
-    cyl.GetHeightAttr().Set(0.05)
-    xf = UsdGeom.Xformable(cyl.GetPrim())
-    xf.AddTranslateOp().Set(Gf.Vec3d(float(pos[0]), float(pos[1]), float(z + 0.025)))
-    pad_prim = cyl.GetPrim()
-    UsdPhysics.CollisionAPI.Apply(pad_prim)
-    UsdGeom.Imageable(pad_prim).MakeVisible()
-    sem = Semantics.SemanticsAPI.Apply(pad_prim, "Semantics")
-    sem.CreateSemanticTypeAttr().Set("class")
-    sem.CreateSemanticDataAttr().Set("terrain")
 
 
 # ── OmniGraph ─────────────────────────────────────────────────────────────────

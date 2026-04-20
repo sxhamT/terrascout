@@ -50,7 +50,7 @@ class MPCDescentOptimizer:
 
     def __init__(
         self,
-        N: int = 10,
+        N: int = 6,
         dt: float = 0.1,
         Q: np.ndarray = None,
         R: np.ndarray = None,
@@ -128,8 +128,8 @@ class MPCDescentOptimizer:
             method="SLSQP",
             bounds=list(zip(lb, ub)),
             options={
-                "maxiter": 100,
-                "ftol": 1e-3,
+                "maxiter": 80,
+                "ftol": 1e-2,
                 "disp": False,
             },
         )
@@ -143,11 +143,16 @@ class MPCDescentOptimizer:
             u_opt = u_seq[0]
         else:
             if not result.success:
-                print(f"[MPC] Solver failed: {result.message} — using PID fallback")
+                print(f"[MPC] Solver failed: {result.message} — emergency brake")
             else:
-                print(f"[MPC] Timeout ({elapsed*1000:.1f}ms) — using PID fallback")
-            # Gravity compensation only (hover in place)
-            u_opt = np.array([0.0, 0.0, 0.0])
+                print(f"[MPC] Timeout ({elapsed*1000:.1f}ms) — emergency brake")
+            # Emergency brake — proportional upward acceleration to arrest descent.
+            # Zero fallback is wrong: hover force only maintains current vz,
+            # it does not decelerate a descending drone.
+            current_vz = float(x0[5])
+            brake_az = -current_vz * 3.0
+            brake_az = float(np.clip(brake_az, -self.a_max_vert, self.a_max_vert))
+            u_opt = np.array([0.0, 0.0, brake_az])
 
         return u_opt
 
@@ -204,6 +209,15 @@ class MPCDescentOptimizer:
         # Terminal cost
         dx_N = xs[self.N] - x_ref
         J += float(dx_N @ self.P @ dx_N)
+
+        # Soft velocity penalty below 3 m — prevents high-speed impact.
+        # Replaces hard velocity constraints (which caused most SLSQP timeouts).
+        # Penalises |vz| > 0.5 m/s whenever the predicted altitude is < 3 m.
+        vz_seq  = xs[1:, 5]                              # (N,)
+        alt_seq = xs[1:, 2]                              # (N,)
+        low_alt = (alt_seq < 3.0).astype(np.float64)
+        J += float(np.sum(low_alt * 50.0 * np.maximum(0.0, np.abs(vz_seq) - 0.5) ** 2))
+
         return J
 
     def reset(self):
