@@ -365,8 +365,10 @@ class OODABackend(Backend):
                               and self._lidar_frame_count >= DESCEND_MIN_SCANS
                               and speed >= 0.8)
         if zone_found_braking:
-            # Hold altitude — let speed bleed before commit
-            target_z = float(s["position"][2])
+            # Snap _descent_target_z to approach floor so APPROACH doesn't have
+            # to climb after commit. Hold that altitude to bleed speed.
+            self._descent_target_z = max(self._descent_target_z, 8.0)
+            target_z = self._descent_target_z
         elif vz > -1.0:
             self._descent_target_z = max(8.0, self._descent_target_z - 0.02)
             target_z = self._descent_target_z

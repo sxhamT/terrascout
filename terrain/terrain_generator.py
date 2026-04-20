@@ -322,6 +322,10 @@ def _create_heightmap(stage, prim_path: str, grid: int = 80):
     xs = np.linspace(-extent, extent, grid)
     ys = np.linspace(-extent, extent, grid)
 
+    # Flat vertex coordinate arrays — used for pad colour override below.
+    xs_flat = np.tile(xs, grid)          # shape (grid*grid,) — x repeats per row
+    ys_flat = np.repeat(ys, grid)        # shape (grid*grid,) — y repeats per column
+
     # Build vertex array (grid*grid, 3)
     verts = []
     heights = []
@@ -375,6 +379,15 @@ def _create_heightmap(stage, prim_path: str, grid: int = 80):
             t = (h - 0.75) / 0.25
             r, g, b = 0.75 + t * 0.25, 0.75 + t * 0.25, 0.75 + t * 0.25
         colors.append(Gf.Vec3f(float(min(r, 1.0)), float(min(g, 1.0)), float(min(b, 1.0))))
+
+    # Override pad vertices to bright green for visual confirmation.
+    # Does not affect physics, heightmap geometry, or synthetic raycast.
+    for vi, (vx_coord, vy_coord) in enumerate(zip(xs_flat, ys_flat)):
+        for pad in FLAT_PADS:
+            dist = np.sqrt((vx_coord - pad["cx"])**2 + (vy_coord - pad["cy"])**2)
+            if dist <= pad["r"]:
+                colors[vi] = Gf.Vec3f(0.05, 0.85, 0.15)   # bright green
+                break
 
     primvar_api = UsdGeom.PrimvarsAPI(mesh.GetPrim())
     color_pv = primvar_api.CreatePrimvar(
