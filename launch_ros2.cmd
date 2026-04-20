@@ -11,3 +11,4 @@ set ISAAC_ROS2_DISTRO=humble
 
 cd D:\project\terrascout
 python terrascout_main.py
+pause

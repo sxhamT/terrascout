@@ -1,6 +1,6 @@
 # CLAUDE.md — TerraScout
 # For: Claude Code (WSL2) — primary interface for all code changes
-# Last updated: April 20, 2026 (Day 7 — report phase)
+# Last updated: April 20, 2026 (Day 7 — sim stabilisation + viz)
 
 ---
 
@@ -65,7 +65,7 @@ The Bayesian + Kalman components are required for the mastery grade.
 
 Autonomous terrain-scanning quadrotor digital twin in Isaac Sim 5.1.0.
 A single quadrotor OODA loop:
-1. Takes off to 30 m scan altitude
+1. Takes off to 15 m scan altitude
 2. Executes lawnmower LiDAR sweep over procedural terrain
 3. Classifies each cell: geometric pre-filter -> Kalman height tracker -> Bayesian P(safe)
 4. Selects best zone where P(safe) > 0.85 AND Kalman variance < threshold
@@ -109,7 +109,7 @@ interplanetary in main body (Iris quadrotor physics invalid on Mars/Moon).
 ```
 D:\project\terrascout\
 |-- CLAUDE.md
-|-- terrascout_main.py
+|-- terrascout_main.py                 # LidarViz integrated in main loop
 |-- launch_ros2.cmd
 |-- fastdds_wsl.xml                    # auto-generated, do not edit
 |-- .gitignore
@@ -124,13 +124,16 @@ D:\project\terrascout\
 |   |-- observe.py                     # from dronos — do not modify
 |   |-- pid_controller.py              # from dronos — do not modify
 |   |-- decide.py
-|   |-- ooda_backend.py                # all fixes applied
+|   |-- ooda_backend.py                # cell_size=0.5, step=0.25, _last_scan_pts, min_radius=0.7
+|   |-- ooda_backend_old.py            # original backup — do not use
 |   |-- terrain_classifier.py          # exists — Kalman+Bayesian classifier
+|   |-- lidar_viz.py                   # live top-down zone map (omni.ui window)
 |   +-- mpc_descent.py
 |
 |-- terrain/
 |   |-- __init__.py
-|   |-- terrain_generator.py           # all fixes applied
+|   |-- terrain_generator.py           # smart bowl placement, sigma=2.0, slope colors, cell_size=0.5
+|   |-- terrain_generator_old.py       # original backup — do not use
 |   +-- zone_manager.py                # all fixes applied — cluster-based zone selection
 |
 |-- scanner/
@@ -148,19 +151,33 @@ D:\project\terrascout\
 
 ---
 
-## CURRENT STATUS: Day 7-10 — Report
+## CURRENT STATUS: Day 7 — Sim stabilised, ready for eval + report
 
-Simulation is complete. All code components are done and verified in sim.
-Focus is now on the ACM BuildSyS report and offline eval numbers.
+Cluster detection bug (no safe zones after 500 scans) was root-caused and fixed.
+Cause: previous terrain_generator placed Gaussian bowls at random positions that
+landed on steep wave crests. New version uses `_pick_bowl_positions()` which
+pre-screens the terrain grid and only places bowls where background slope < 12°.
+
+Live zone map visualiser (LidarViz) added — floating omni.ui window shows
+grey/green/yellow/red grid, cyan scan footprint, white cross on committed zone.
 
 **Immediate actions:**
-1. Run `python eval/run_eval.py --n 50 --seed 42` for MC results
-2. Run `python eval/mpc_vs_pid_benchmark.py --n 20 --seed 42`
-3. Run `python eval/plot_results.py` for LaTeX-ready figures
-4. Write report following the outline below
+1. Run sim once to confirm TOUCHDOWN now works with new terrain
+2. Run `python eval/run_eval.py --n 50 --seed 42` for MC results
+3. Run `python eval/mpc_vs_pid_benchmark.py --n 20 --seed 42`
+4. Run `python eval/plot_results.py` for LaTeX-ready figures
+5. Write report following the outline below
 
 **terrain_classifier.py** — DONE (Day 2). Implements Kalman + Bayesian + geometric
 pre-filter as required by M6/M7/M9. Do not modify unless a bug surfaces in eval.
+
+**Key tuned parameters (as of Day 7):**
+- `SCAN_ALTITUDE = 15.0` m
+- `cell_size = 0.5` m (ZoneManager + TerrainClassifier — finer grid than original 1.0)
+- `min_radius_m = 0.7` for cluster detection
+- LiDAR raycast `step = 0.25` m (~5000 pts/scan at 15m alt)
+- Bowl sigma = 2.0 m (~8–10m effective landing zone diameter)
+- Bowl depth = adaptive: `min(wave_z - 0.1, 0.8)` m
 
 ---
 
@@ -324,6 +341,14 @@ terrascout_main.py:
 
 9. ~~PID signature mismatch in ooda_backend.py~~ — FIXED (Day 6). All 4 call sites updated.
 
+10. terrain_generator.py FLAT_PADS format: uses {"cx","cy","depth","sigma"} — NOT {"cx","cy","r"}.
+    ooda_backend.py _synthetic_lidar_scan() must use the Gaussian formula to match _heightmap_z().
+    The two files are tightly coupled — never update one without checking the other.
+
+11. _old backup files exist for ooda_backend and terrain_generator.
+    To revert: cp controller/ooda_backend_old.py controller/ooda_backend.py
+               cp terrain/terrain_generator_old.py terrain/terrain_generator.py
+
 ---
 
 ## PID Controller Reference
@@ -463,7 +488,9 @@ feature/scaffold              [merged]
 feature/terrain-classifier    [merged]
 feature/ooda-fixes            [merged]
 feature/lidar-setup           [ACTIVE] — synthetic raycast, terrain tuning, verbose OODA logging,
-                                          descent speed fixes, MPC lateral-only LAND
+                                          descent speed fixes, MPC lateral-only LAND,
+                                          smart bowl placement, denser scan grid (step=0.25),
+                                          LidarViz live zone map, cell_size=0.5 throughout
 ```
 
 ```cmd
@@ -486,7 +513,8 @@ git checkout main && git merge feature/name && git push
 | Day 4 | done | Terrain roughness tuned (high-freq heightmap), height-based vertex colors, boulder registry for raycast, ZoneManager margin fix |
 | Day 5 | done | Verbose phase logging (DESCEND_SCAN 2s, zone-selected banner, LAND per-tick, TOUCHDOWN/ABORT banners), fastdds_wsl.xml gitignored |
 | Day 6 | done | Descent speed fixes: _descent_target_z (0.02m/tick + vz hold), _land_target_z (0.01m/tick + vz freeze), MPC lateral-only in LAND (u[2]=0), velocity cap helper _vel_cap_force(2.0 m/s) applied in all non-LAND phases |
-| Day 7-10 | in progress | Report — eval pipeline first, then ACM LaTeX writeup |
+| Day 7 | done | Root-caused no-cluster bug (random bowl placement on steep terrain). Fixed with _pick_bowl_positions() selecting slope<12° candidates. sigma=2.0, cell_size=0.5, step=0.25. Added LidarViz live zone map. |
+| Day 8-10 | in progress | Report — eval pipeline first, then ACM LaTeX writeup |
 
 ---
 

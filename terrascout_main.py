@@ -55,14 +55,25 @@ set_camera_view(
     target=np.array([0.0, 0.0, 0.0]),
 )
 
+# ── 8. LiDAR zone map visualiser (floating omni.ui window) ─────────────────
+from controller.lidar_viz import LidarViz
+_viz = LidarViz(
+    terrain_size=zone_manager.terrain_size,
+    cell_size=zone_manager.cell_size,
+    px=420,
+    update_every=15,   # refresh every 15 sim ticks (~4 Hz at 60 Hz sim)
+)
+
 print("[TerraScout] Simulation running. Ctrl+C or close window to stop.")
 
-# ── 8. Main loop ─────────────────────────────────────────────────────────────
+# ── 9. Main loop ─────────────────────────────────────────────────────────────
 try:
     while simulation_app.is_running():
         simulation_app.update()
+        _viz.refresh(zone_manager, _ooda_backend)
 except KeyboardInterrupt:
     print("[TerraScout] Interrupted.")
 finally:
+    _viz.close()
     timeline.stop()
     simulation_app.close()
